@@ -7,6 +7,7 @@ Navigateur de fichiers avec preview dans une fenêtre séparée
 
 import sys
 import os
+import re
 import string
 from datetime import datetime
 
@@ -82,6 +83,50 @@ def get_file_type(ext):
     if ext in RTF_EXTENSIONS:
         return 'rtf'
     return None
+
+
+def natural_sort_key(name):
+    """Generate a sort key that handles numbers naturally.
+    'D1' < 'D2' < 'D10' instead of 'D1' < 'D10' < 'D2'
+    """
+    parts = re.split(r'(\d+)', name.lower())
+    result = []
+    for part in parts:
+        if part.isdigit():
+            result.append((1, int(part)))
+        else:
+            result.append((0, part))
+    return result
+
+
+def get_type_icon_char(file_type, ext):
+    """Return an emoji character for file type indication."""
+    if file_type == 'pdf':
+        return '📄'
+    if file_type == 'image':
+        return '🖼️'
+    if file_type in ('docx', 'rtf'):
+        return '📝'
+    # Common non-previewable types
+    ext = ext.lower()
+    if ext in ('.exe', '.msi'):
+        return '⚙️'
+    if ext in ('.zip', '.rar', '.7z', '.tar', '.gz'):
+        return '📦'
+    if ext in ('.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma'):
+        return '🎵'
+    if ext in ('.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv'):
+        return '🎬'
+    if ext in ('.py', '.js', '.html', '.css', '.json', '.xml', '.yml', '.yaml',
+               '.c', '.cpp', '.h', '.java', '.cs', '.rb', '.go', '.rs', '.sh', '.bat'):
+        return '💻'
+    if ext in ('.txt', '.md', '.log', '.csv', '.ini', '.cfg'):
+        return '📃'
+    if ext in ('.xls', '.xlsx', '.ods'):
+        return '📊'
+    if ext in ('.ppt', '.pptx', '.odp'):
+        return '📽️'
+    return '📄'
 
 
 def extract_docx_html(file_path):
@@ -818,8 +863,7 @@ class ExplorerWindow(QMainWindow):
         self.file_list.customContextMenuRequested.connect(self._show_context_menu)
         self.file_list.currentItemChanged.connect(self._on_file_selection_changed)
         self.file_list.itemDoubleClicked.connect(self._on_file_double_clicked)
-        self.file_list.setSortingEnabled(True)
-        self.file_list.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+        self.file_list.setSortingEnabled(False)
 
         header = self.file_list.header()
         header.setStretchLastSection(False)
@@ -931,56 +975,64 @@ class ExplorerWindow(QMainWindow):
     # File list
 
     def _populate_file_list(self):
+        self.file_list.setSortingEnabled(False)
         self.file_list.clear()
-        items_dirs = []
-        items_files = []
+        entries_dirs = []
+        entries_files = []
 
         try:
             for entry in os.scandir(self.current_path):
                 try:
                     stat = entry.stat()
                     is_dir = entry.is_dir(follow_symlinks=False)
-
                     if is_dir:
-                        item = QTreeWidgetItem([
-                            entry.name, "", format_date(stat.st_mtime), "Dossier"
-                        ])
-                        item.setData(0, Qt.ItemDataRole.UserRole, {
-                            'path': entry.path, 'is_dir': True, 'name': entry.name,
-                        })
-                        item.setData(0, Qt.ItemDataRole.UserRole + 1, f"0_{entry.name.lower()}")
-                        items_dirs.append(item)
+                        entries_dirs.append((entry.name, entry.path, stat))
                     else:
-                        ext = os.path.splitext(entry.name)[1].lower()
-                        file_type = get_file_type(ext)
-                        item = QTreeWidgetItem([
-                            entry.name, format_size(stat.st_size),
-                            format_date(stat.st_mtime),
-                            ext[1:].upper() if ext else ""
-                        ])
-                        item.setData(0, Qt.ItemDataRole.UserRole, {
-                            'path': entry.path, 'is_dir': False, 'name': entry.name,
-                            'previewable': file_type is not None,
-                            'file_type': file_type,
-                        })
-                        item.setData(0, Qt.ItemDataRole.UserRole + 1, f"1_{entry.name.lower()}")
-                        items_files.append(item)
-
+                        entries_files.append((entry.name, entry.path, stat))
                 except (PermissionError, OSError):
                     continue
         except (PermissionError, OSError):
             pass
 
-        for item in items_dirs:
-            self.file_list.addTopLevelItem(item)
-        for item in items_files:
+        # Natural sort
+        entries_dirs.sort(key=lambda e: natural_sort_key(e[0]))
+        entries_files.sort(key=lambda e: natural_sort_key(e[0]))
+
+        # Add folders first
+        for name, path, stat in entries_dirs:
+            item = QTreeWidgetItem([
+                f"📁  {name}", "", format_date(stat.st_mtime), "Dossier"
+            ])
+            item.setData(0, Qt.ItemDataRole.UserRole, {
+                'path': path, 'is_dir': True, 'name': name,
+            })
             self.file_list.addTopLevelItem(item)
 
-        preview_count = sum(1 for it in items_files
-                            if it.data(0, Qt.ItemDataRole.UserRole).get('previewable'))
+        # Then files
+        preview_count = 0
+        for name, path, stat in entries_files:
+            ext = os.path.splitext(name)[1].lower()
+            file_type = get_file_type(ext)
+            icon_char = get_type_icon_char(file_type, ext)
+
+            if file_type is not None:
+                preview_count += 1
+
+            item = QTreeWidgetItem([
+                f"{icon_char}  {name}", format_size(stat.st_size),
+                format_date(stat.st_mtime),
+                ext[1:].upper() if ext else ""
+            ])
+            item.setData(0, Qt.ItemDataRole.UserRole, {
+                'path': path, 'is_dir': False, 'name': name,
+                'previewable': file_type is not None,
+                'file_type': file_type,
+            })
+            self.file_list.addTopLevelItem(item)
+
         self.status_count.setText(
-            f"{len(items_dirs)} dossier{'s' if len(items_dirs) != 1 else ''}  |  "
-            f"{len(items_files)} fichier{'s' if len(items_files) != 1 else ''}  "
+            f"{len(entries_dirs)} dossier{'s' if len(entries_dirs) != 1 else ''}  |  "
+            f"{len(entries_files)} fichier{'s' if len(entries_files) != 1 else ''}  "
             f"({preview_count} prévisualisable{'s' if preview_count != 1 else ''})  "
         )
 
