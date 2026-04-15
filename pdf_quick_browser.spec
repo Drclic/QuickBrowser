@@ -4,7 +4,7 @@ a = Analysis(
     ['pdf_quick_browser.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('icon.ico', '.')],
     hiddenimports=[
         'PySide6.QtPdf',
         'PySide6.QtPdfWidgets',

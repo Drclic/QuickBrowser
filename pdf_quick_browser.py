@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QFileSystemModel, QScrollArea, QTextBrowser, QStackedWidget
 )
 from PySide6.QtCore import (
-    Qt, QTimer, QDir, QModelIndex, QSize, QFileInfo, Signal, QObject
+    Qt, QTimer, QDir, QModelIndex, QSize, QFileInfo, Signal, QObject, QPointF
 )
 from PySide6.QtGui import (
     QKeySequence, QFont, QColor, QPalette, QShortcut,
@@ -340,6 +340,7 @@ class ViewerWindow(QMainWindow):
         self.active_doc = None
         self.active_path = None
         self.active_type = None
+        self.explorer = None  # set by ExplorerWindow after init
 
         self._setup_ui()
         self._setup_shortcuts()
@@ -561,6 +562,10 @@ class ViewerWindow(QMainWindow):
         self.pdf_view.setDocument(doc)
         self.stack.setCurrentIndex(1)
 
+        # Reset to first page
+        nav = self.pdf_view.pageNavigator()
+        nav.jump(0, QPointF())
+
         name = os.path.basename(file_path)
         pc = doc.pageCount()
         self.file_label.setText(f"  📄 {name}")
@@ -738,6 +743,50 @@ class ViewerWindow(QMainWindow):
         if self.active_type == 'image' and self.pdf_view.zoomMode() != QPdfView.ZoomMode.Custom:
             QTimer.singleShot(10, self._update_image_display)
 
+    def keyPressEvent(self, event):
+        """Forward ↑↓ navigation to explorer file list."""
+        key = event.key()
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down) and self.explorer:
+            fl = self.explorer.file_list
+            current = fl.currentItem()
+            if current is None:
+                return
+            idx = fl.indexOfTopLevelItem(current)
+            if key == Qt.Key.Key_Down:
+                new_idx = min(idx + 1, fl.topLevelItemCount() - 1)
+            else:
+                new_idx = max(idx - 1, 0)
+            if new_idx != idx:
+                fl.setCurrentItem(fl.topLevelItem(new_idx))
+            return
+        if key == Qt.Key.Key_PageDown and self.explorer:
+            fl = self.explorer.file_list
+            current = fl.currentItem()
+            if current:
+                idx = fl.indexOfTopLevelItem(current)
+                new_idx = min(idx + 10, fl.topLevelItemCount() - 1)
+                fl.setCurrentItem(fl.topLevelItem(new_idx))
+            return
+        if key == Qt.Key.Key_PageUp and self.explorer:
+            fl = self.explorer.file_list
+            current = fl.currentItem()
+            if current:
+                idx = fl.indexOfTopLevelItem(current)
+                new_idx = max(idx - 10, 0)
+                fl.setCurrentItem(fl.topLevelItem(new_idx))
+            return
+        if key == Qt.Key.Key_Home and self.explorer:
+            fl = self.explorer.file_list
+            if fl.topLevelItemCount() > 0:
+                fl.setCurrentItem(fl.topLevelItem(0))
+            return
+        if key == Qt.Key.Key_End and self.explorer:
+            fl = self.explorer.file_list
+            if fl.topLevelItemCount() > 0:
+                fl.setCurrentItem(fl.topLevelItem(fl.topLevelItemCount() - 1))
+            return
+        super().keyPressEvent(event)
+
     def closeEvent(self, event):
         self.hide()
         event.ignore()
@@ -751,6 +800,7 @@ class ExplorerWindow(QMainWindow):
     def __init__(self, viewer: ViewerWindow):
         super().__init__()
         self.viewer = viewer
+        self.viewer.explorer = self  # allow viewer to navigate files
         self.setWindowTitle("PDF Quick Browser — Explorateur")
         self.setMinimumSize(500, 400)
         self.resize(750, 900)
@@ -1156,6 +1206,18 @@ def main():
 
     viewer = ViewerWindow()
     explorer = ExplorerWindow(viewer)
+
+    # Set window icon (works both in dev and PyInstaller bundle)
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    icon_path = os.path.join(base_path, 'icon.ico')
+    if os.path.exists(icon_path):
+        app_icon = QIcon(icon_path)
+        app.setWindowIcon(app_icon)
+        explorer.setWindowIcon(app_icon)
+        viewer.setWindowIcon(app_icon)
 
     screen = app.primaryScreen().availableGeometry()
     explorer_w = int(screen.width() * 0.38)
